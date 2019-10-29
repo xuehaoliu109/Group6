@@ -1,32 +1,80 @@
-from flask import Flask, request
+from flask import Flask, request, send_file, send_from_directory
+app = Flask(__name__, static_url_path='',
+            static_folder='',
+            template_folder='')
 from bs4 import BeautifulSoup
-import spacy
-import unidecode
-from word2number import w2n
-# from pycontractions import Contractions
-import gensim.downloader as api
-import xml.etree.ElementTree as ET
-import pandas as pd
-import re
-from IPython.display import display, clear_output
-import numpy as np
-from sklearn.model_selection import train_test_split
-# import pandas as pd
-import tensorflow as tf
-import tensorflow_hub as hub
-from datetime import datetime
-import collections
-import bert
-from bert import run_classifier
-from bert import optimization
-from bert import tokenization
-from bert import modeling
 import pickle
-app = Flask(__name__)
+import matplotlib.pyplot as plt
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.neighbors import NearestNeighbors
+from scipy.spatial.distance import euclidean
+from sklearn.cluster import MeanShift, estimate_bandwidth, DBSCAN
+from sklearn.preprocessing import StandardScaler
+import numpy as np
+import pandas as pd
+import os
 
-@app.route('/test', methods=['get'])
+
+@app.route('/<string:filename>', methods=['GET'])
+def download(filename):
+    if request.method == "GET":
+
+        return send_file(filename)
+
+
+
+@app.route('/page')
+def page():
+    page_str = '''
+    <!DOCTYPE html>
+
+<html>
+    <head>
+        <title>Button</title>
+    </head>
+    <body>
+
+        <script type="text/javascript">
+            function changeText() {
+                
+            
+            var http = new XMLHttpRequest();
+var url = '/test';
+var params = "input=" + document.getElementById('inputtext').value;
+
+http.open('POST', url, false);
+
+//Send the proper header information along with the request
+http.setRequestHeader('Content-type', 'application/x-www-form-urlencoded');
+
+
+http.send(params);
+document.getElementById('pText').innerHTML = http.responseText;
+
+}
+        </script>
+
+  <center>Input question:<br>
+  <input type="text" name="input" id="inputtext"><br>
+  <input type="submit" value="Submit" onclick="changeText();">
+
+  <p>Recommended tags:</p>
+  <p id="pText">Click on a Button</p>
+  </center>
+    </body>
+</html>
+
+    '''
+
+    return page_str
+
+
+
+
+
+@app.route('/test', methods=['post'])
 def test():
-    recv = request.args['input']
+    recv = request.form['input']
     #
     # BERT_VOCAB = 'uncased_L-12_H-768_A-12/vocab.txt'
     # BERT_INIT_CHKPNT = 'uncased_L-12_H-768_A-12/bert_model.ckpt'
@@ -658,16 +706,63 @@ def test():
     eight_tags = ['matlab', 'svm', 'tensorflow', 'data-mining', 'scikit-learn', 'classification', 'nlp',
                   'computer-vision']
     eight_models = [pickle.load(open(i + '.sav', 'rb')) for i in eight_tags]
+    ml_portion = pd.read_csv('bq-results-20191008-111732-imlpiwqnrg8k.csv')
+
+    def plot_tsne(xy, colors=None, alpha=1, figsize=(16, 16), s=3, cmap='hsv', location=None):
+        plt.figure(figsize=figsize, facecolor='white')
+        plt.margins(0)
+        plt.axis('off')
+        fig = plt.scatter(xy[:, 0], xy[:, 1],
+                          c=colors,  # set colors of markers
+                          cmap=cmap,  # set color map of markers
+                          alpha=alpha,  # set alpha of markers
+                          marker=',',  # use smallest available marker (square)
+                          s=s,  # set marker size. single pixel is 0.5 on retina, 1.0 otherwise
+                          lw=1,  # don't use edges
+                          edgecolor='')  # don't use edges
+        # remove all axes and whitespace / borders
+        fig.axes.get_xaxis().set_visible(False)
+        fig.axes.get_yaxis().set_visible(False)
+        if location is not None:
+            for i in location:
+                plt.scatter(xy[i, 0], xy[i, 1], s=100, c='b', marker=(5, 2, 0))
+                plt.plot([xy[i, 0], -200], [xy[i, 1], -400])
+            plt.text(-200, -400, 'Similar questions are here', fontsize=12, horizontalalignment='right', verticalalignment='top')
+            plt.savefig('scatter_with_instance.png')
+        else:
+            plt.savefig('scatter.png')
+        # plt.show()
 
 
     if not recv == '':
         eight_predicts = []
+        embed = np.load('100_tsne_embed_50000.npy')
+        result = np.load('100_topic_lda_result.npy')
+        filename = '100_topic_lda_model.sav'
+        lda = pickle.load(open(filename, 'rb'))
+        filename = 'bs4_countvector.sav'
+        count_vectorizer = pickle.load(open(filename, 'rb'))
+        labels = np.load('100_tsne_embed_50000_labels.npy')
+        filename = '100_topic_knn_model.sav'
+        neighbors = pickle.load(open(filename, 'rb'))
+
         result_str = ''
+        recv = BeautifulSoup(recv, "html.parser").text
+        test_vector = count_vectorizer.transform([recv])
+        test_topic = lda.transform(test_vector)
+        test_topic_mapping = neighbors.kneighbors(test_topic, n_neighbors=10)
+        plot_tsne(embed, labels, location=test_topic_mapping[1][0])
+
+
         for i in range(len(eight_tags)):
             result = eight_models[i].predict([recv])
             if result[0] > 0.5:
                 result_str += eight_tags[i]
-            result_str += ' '
+                # result_str += ' '
+                # result_str += 'Pr='
+                # result_str += str(result[0])
+                result_str += ' '
+
         # test = [(1234, recv)]
         #
         # predict_input_fn = file_based_input_fn_builder(
@@ -694,6 +789,17 @@ def test():
         #     result_str += ': '
         #     result_str += str(prb[i])
         #     result_str += '     '
+        result_str += '<br>'
+        result_str += '<img src="http://0.0.0.0:8889/scatter_with_instance.png">'
+        result_str += '<br><br><br>'
+        count = 0
+        for i in test_topic_mapping[1][0]:
+            count += 1
+            result_str += 'The similar question #' + str(count)
+            result_str += '<br>'
+            result_str += BeautifulSoup(ml_portion['body'][i], "html.parser").text
+            result_str += '<br><br>'
+
 
         return result_str
     else:
